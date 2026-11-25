@@ -7,6 +7,7 @@ typedef struct {
     float yaw_deg;
 } Waypoint;
 
+// Avança o índice circular da rota e devolve o waypoint selecionado.
 Waypoint nav_plan_avancar(unsigned int *indice);
 float nav_plan_calcular_carga(float semente);
 

@@ -1,5 +1,6 @@
 #include "nav_plan.h"
 
+// Pontos da rota da M2 com roll, pitch e yaw em graus.
 static const Waypoint rota[] = {
     {0.0f, 0.0f, 0.0f},
     {5.0f, 0.0f, 30.0f},
@@ -14,7 +15,7 @@ Waypoint nav_plan_avancar(unsigned int *indice)
 
 float nav_plan_calcular_carga(float semente)
 {
-    // Mesma carga por iteração usada na NAV_PLAN da M2.
+    // Reaproveita a carga da M2. O volatile preserva os cálculos com otimização.
     volatile float valor = semente;
 
     for (unsigned int i = 0; i < 24000U; ++i) {

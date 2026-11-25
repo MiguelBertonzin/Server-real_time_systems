@@ -19,9 +19,9 @@
 
 enum {
     DURACAO_S = 10,
-    PERIODO_MS = 50,
-    ORCAMENTO_MS = 20,
-    RESERVA_NAV_MS = 5,
+    PERIODO_MS = 50,      // Intervalo entre liberações do servidor.
+    ORCAMENTO_MS = 20,    // Limite de CPU por janela.
+    RESERVA_NAV_MS = 5,   // Folga mínima para admitir outro NAV.
     CARGA_NAV_MS = 4,
     CARGA_TAREFA_MS = 5,
     PRAZO_NAV_MS = 20,
@@ -91,6 +91,7 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t evento_pronto;
     Pedido fila[TOTAL_PEDIDOS];
+    // Primeiro pedido pendente e posição da próxima inserção na fila FIFO.
     size_t primeiro;
     size_t proximo;
     Resultado resultados[TOTAL_PEDIDOS];
@@ -126,6 +127,7 @@ static int64_t tempo_ns(clockid_t relogio)
     return (int64_t)tempo.tv_sec * NS_POR_S + tempo.tv_nsec;
 }
 
+// A espera absoluta mantém a agenda referenciada ao início do ensaio.
 static void dormir_ate(int64_t instante)
 {
     struct timespec tempo = {
@@ -199,6 +201,7 @@ static int retirar(Execucao *execucao, Pedido *pedido)
 
 static void ocupar_cpu(int duracao_ms, float semente)
 {
+    // O relógio de CPU contabiliza o tempo efetivo de execução da thread.
     int64_t inicio = tempo_ns(CLOCK_THREAD_CPUTIME_ID);
     do {
         semente = nav_plan_calcular_carga(semente);
@@ -211,6 +214,7 @@ static void atender(Execucao *execucao, Pedido pedido, unsigned int janela,
     Resultado *resultado = &execucao->resultados[pedido.id - 1];
     resultado->pedido = pedido;
     resultado->janela = janela;
+    // O relógio monotônico marca a resposta. O relógio de CPU mede o custo do NAV.
     resultado->inicio = tempo_ns(CLOCK_MONOTONIC);
 
     int64_t cpu_inicio = tempo_ns(CLOCK_THREAD_CPUTIME_ID);
@@ -237,6 +241,7 @@ static void *tarefa_periodica(void *arg)
             break;
 
         ++tarefa->ativacoes;
+        // A amostragem reduz a saída no terminal. Cada ativação mantém sua carga.
         if (execucao->detalhado || agora >= proxima_exibicao) {
             registrar_evento(execucao, (Evento){
                 .tipo = ATIVACAO,
@@ -267,12 +272,13 @@ static void *servidor(void *arg)
         if (agora >= execucao->fim)
             break;
 
+        // Se o servidor acordar atrasado, usa a janela vigente na agenda.
         liberacao += (agora - liberacao) / periodo * periodo;
         unsigned int janela = (unsigned int)((liberacao - execucao->inicio) / periodo);
         int64_t proxima = liberacao + periodo;
         int64_t cpu_inicio = tempo_ns(CLOCK_THREAD_CPUTIME_ID);
 
-        // Só retira um pedido quando ainda cabe a reserva de atendimento.
+        // A reserva precisa caber no orçamento de CPU e no tempo restante da janela.
         while (true) {
             int64_t gasto = tempo_ns(CLOCK_THREAD_CPUTIME_ID) - cpu_inicio;
             bool limite_cpu = gasto + reserva > orcamento;
@@ -306,6 +312,7 @@ static int criar_thread(pthread_t *thread, void *(*funcao)(void *), void *arg,
     struct sched_param param = {
         .sched_priority = tempo_real ? prioridade : 0
     };
+    // A política e a prioridade desta thread vêm dos atributos abaixo.
     erro = pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
     if (erro == 0)
         erro = pthread_attr_setschedpolicy(&attr, politica);
@@ -367,6 +374,7 @@ static void *exibir_eventos(void *arg)
             break;
         }
         Evento evento = execucao->eventos[leitura++];
+        // Libera o mutex antes de escrever no terminal para a fila continuar disponível.
         pthread_mutex_unlock(&execucao->mutex);
         imprimir_evento(execucao, evento);
     }
@@ -435,6 +443,7 @@ static int iniciar_mutex(pthread_mutex_t *mutex)
     int erro = pthread_mutexattr_init(&attr);
     if (erro != 0)
         return erro;
+    // Quem detém o mutex pode herdar a prioridade de uma thread que espera por ele.
     erro = pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT);
     if (erro == 0)
         erro = pthread_mutex_init(mutex, &attr);
@@ -458,6 +467,7 @@ int main(int argc, char **argv)
     }
 
     setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
+    // A agenda começa 100 ms depois, dando tempo para criar as threads.
     int64_t inicio = tempo_ns(CLOCK_MONOTONIC) + 100 * NS_POR_MS;
     Execucao execucao = {
         .evento_pronto = PTHREAD_COND_INITIALIZER,
@@ -536,6 +546,7 @@ int main(int argc, char **argv)
             return EXIT_FAILURE;
         }
     }
+    // A exibição recebe o sinal de fim e imprime os eventos ainda pendentes.
     pthread_mutex_lock(&execucao.mutex);
     execucao.terminou = true;
     pthread_cond_signal(&execucao.evento_pronto);
